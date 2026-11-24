@@ -1,0 +1,74 @@
+// =====================================================================
+// dax_measures.dax  -  paste each block in Power BI: Modeling > New measure / New table
+// Table names assume you imported the 7 CSVs from data/cleaned/ with these names:
+//   customers, sellers, products, orders, order_items, payments, returns
+// =====================================================================
+
+// ---------- DATE TABLE (Modeling > New table) ----------
+Date =
+ADDCOLUMNS(
+    CALENDAR(DATE(2023, 1, 1), DATE(2024, 12, 31)),
+    "Year",         YEAR([Date]),
+    "Month Number", MONTH([Date]),
+    "Month",        FORMAT([Date], "MMM"),
+    "Year-Month",   FORMAT([Date], "YYYY-MM"),
+    "Festive Season", IF(MONTH([Date]) IN {10, 11}, "Festive (Oct-Nov)", "Rest of year")
+)
+// After creating it: select Month column > Column tools > Sort by column > Month Number.
+// Mark as date table: Table tools > Mark as date table > Date.
+
+// ---------- CORE SALES MEASURES ----------
+Total Orders       = DISTINCTCOUNT ( orders[order_id] )
+Valid Orders       = CALCULATE ( DISTINCTCOUNT ( orders[order_id] ), orders[is_valid_sale] = 1 )
+Revenue            = CALCULATE ( SUM ( order_items[price] ), orders[is_valid_sale] = 1 )
+Freight Collected  = CALCULATE ( SUM ( order_items[freight_value] ), orders[is_valid_sale] = 1 )
+Units Sold         = CALCULATE ( COUNTROWS ( order_items ), orders[is_valid_sale] = 1 )
+Active Customers   = CALCULATE ( DISTINCTCOUNT ( orders[customer_id] ), orders[is_valid_sale] = 1 )
+Avg Order Value    = DIVIDE ( [Revenue], [Valid Orders] )
+
+// ---------- TIME INTELLIGENCE ----------
+Revenue LY         = CALCULATE ( [Revenue], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+Revenue YoY %      = DIVIDE ( [Revenue] - [Revenue LY], [Revenue LY] )
+Revenue PM         = CALCULATE ( [Revenue], DATEADD ( 'Date'[Date], -1, MONTH ) )
+Revenue MoM %      = DIVIDE ( [Revenue] - [Revenue PM], [Revenue PM] )
+Festive Revenue Share % =
+DIVIDE (
+    CALCULATE ( [Revenue], 'Date'[Festive Season] = "Festive (Oct-Nov)" ),
+    CALCULATE ( [Revenue], ALL ( 'Date'[Festive Season] ) )
+)
+
+// ---------- CUSTOMERS ----------
+Repeat Customers =
+COUNTROWS (
+    FILTER (
+        customers,
+        CALCULATE ( DISTINCTCOUNT ( orders[order_id] ), orders[is_valid_sale] = 1 ) > 1
+    )
+)
+Repeat Customer % = DIVIDE ( [Repeat Customers], [Active Customers] )
+
+// ---------- DELIVERY & CANCELLATION ----------
+Delivered Orders    = CALCULATE ( COUNTROWS ( orders ), orders[order_status] = "delivered" )
+Late Orders         = CALCULATE ( COUNTROWS ( orders ), orders[is_late] = 1 )
+Late Delivery %     = DIVIDE ( [Late Orders], [Delivered Orders] )
+Avg Delivery Days   = CALCULATE ( AVERAGE ( orders[delivery_days] ), orders[order_status] = "delivered" )
+Cancelled Orders    = CALCULATE ( COUNTROWS ( orders ), orders[order_status] = "canceled" )
+Cancel Rate %       = DIVIDE ( [Cancelled Orders], [Total Orders] )
+
+// ---------- PAYMENTS ----------
+Failed Payments     = CALCULATE ( COUNTROWS ( payments ), payments[payment_status] = "failed" )
+Failed Payment %    = DIVIDE ( [Failed Payments], COUNTROWS ( payments ) )
+EMI Order Share %   = DIVIDE ( CALCULATE ( COUNTROWS ( payments ), payments[payment_method] = "EMI" ), COUNTROWS ( payments ) )
+
+// ---------- RETURNS ----------
+// Use these by Product Category (products table) or by Date. See powerbi/README.md for the
+// note about returns -> orders being the INACTIVE relationship.
+Return Requests     = COUNTROWS ( returns )
+Delivered Units     = CALCULATE ( COUNTROWS ( order_items ), orders[order_status] = "delivered" )
+Return Rate %       = DIVIDE ( [Return Requests], [Delivered Units] )
+Approved Returns %  = DIVIDE ( CALCULATE ( COUNTROWS ( returns ), returns[return_status] = "approved" ), [Return Requests] )
+Avg Days To Resolve = CALCULATE ( AVERAGE ( returns[return_resolution_days] ), returns[return_status] <> "pending" )
+
+// Returns by the month the customer REQUESTED the return (uses the inactive Date -> returns relationship)
+Returns By Request Date =
+CALCULATE ( [Return Requests], USERELATIONSHIP ( 'Date'[Date], returns[return_date] ) )
